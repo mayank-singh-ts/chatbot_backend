@@ -45,9 +45,9 @@ ROUTE_API_URL = "http://127.0.0.1:5000/get_route_and_fare"
 def connect_db():
     """MySQL connection for saving answers"""
     connection = mysql.connector.connect(
-        host="127.0.0.1",
-        user="root",
-        password="Mayank@9568",
+        host="metrochatbot.cliqswukc30i.eu-north-1.rds.amazonaws.com",
+        user="admin",
+        password="Mayank2503",
         database="metro_chatbot"
     )
     return connection
