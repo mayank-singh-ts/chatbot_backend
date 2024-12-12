@@ -13,7 +13,7 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-CORS(app, resources={r"/query": {"origins": "http://localhost:5173"}})
+CORS(app, resources={r"/query": {"origins": "http://13.61.25.113/"}})
 
 user_sessions = {}
 
@@ -38,9 +38,9 @@ FAQ_KEYWORDS = [
 ]
 
 # API endpoints
-FAQ_API_URL = "http://127.0.0.1:8080/faqs"
-INTENT_API_URL = "http://127.0.0.1:8080/intents"
-ROUTE_API_URL = "http://127.0.0.1:5000/get_route_and_fare"
+FAQ_API_URL = "http://13.48.25.214:8080/faqs"
+INTENT_API_URL = "http://13.48.25.214:8080/intents"
+ROUTE_API_URL = "http://13.48.25.214:5000/get_route_and_fare"
 
 def connect_db():
     """MySQL connection for saving answers"""
