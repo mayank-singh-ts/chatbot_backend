@@ -1,28 +1,35 @@
+import logging
+import os
 import requests
 import torch
 from sentence_transformers import SentenceTransformer, util
-from flask import Flask, request, jsonify
 import re
+import warnings
 from difflib import get_close_matches
 from groq import Groq
 import mysql.connector
-import logging
 from flask_cors import CORS
+from flask import Flask, request, jsonify, session, Response, stream_with_context
+from difflib import SequenceMatcher
 
-# Initialize Flask app
+
+# Flask App Configuration
 app = Flask(__name__)
 CORS(app)
+# app.secret_key = "your_secret_key"  # Replace with a secure random key for production
 
 CORS(app, resources={r"/query": {"origins": "http://13.49.68.219/"}})
-
+# Dictionary to store user sessions, keeping track of their last question and related questions cache
 user_sessions = {}
 
+# Initialize Groq client
 client = Groq(api_key="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")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# Initialize sentence transformer model
 model = SentenceTransformer('all-MiniLM-L6-v2')
-
+# Initialize the valid metro stations
 VALID_STATIONS = [
     'Green Park', 'Vaishali', 'Rajiv Chowk', 'Hauz Khas', 'Central Secretariat',
     'Chandni Chowk', 'Dwarka', 'Noida City Centre', 'Huda City Centre', 'Saket',
@@ -31,6 +38,7 @@ VALID_STATIONS = [
     'Jahangirpuri', 'Indraprastha', 'Shastri Park'
 ]
 
+# Define the keywords for FAQ detection
 FAQ_KEYWORDS = [
     'what', 'who', 'where', 'when', 'how', 'why', 'am', 'are', 'was', 'were',
     'do', 'does', 'did', 'have', 'has', 'had', 'can', 'could', 'will', 'would',
@@ -38,7 +46,7 @@ FAQ_KEYWORDS = [
 ]
 
 # API endpoints
-FAQ_API_URL = "http://13.49.68.219/:8080/faqs"
+FAQ_API_URL = "http://13.49.68.219:8080/faqs"
 INTENT_API_URL = "http://13.49.68.219:8080/intents"
 ROUTE_API_URL = "http://13.49.68.219:5000/get_route_and_fare"
 
@@ -52,6 +60,8 @@ def connect_db():
     )
     return connection
 
+
+
 def fetch_faqs():
     response = requests.get(FAQ_API_URL)
     return response.json()
@@ -60,6 +70,7 @@ def fetch_intents():
     response = requests.get(INTENT_API_URL)
     return response.json()
 
+
 def get_sentence_embeddings(texts):
     batch_size = 32
     embeddings = []
@@ -67,6 +78,8 @@ def get_sentence_embeddings(texts):
         batch_embeddings = model.encode(texts[i:i + batch_size], convert_to_tensor=True)
         embeddings.append(batch_embeddings)
     return torch.cat(embeddings)
+
+
 
 def classify_intent(user_query, intent_tensor_embeddings, intent_data, questions, threshold=0.7):
     user_embedding = get_sentence_embeddings([user_query])
@@ -80,15 +93,6 @@ def classify_intent(user_query, intent_tensor_embeddings, intent_data, questions
             for item in items:
                 if item['question'].lower() == best_match_question:
                     return item['answer'], best_score * 100
-    else:
-        close_matches = get_close_matches(user_query, questions, n=1, cutoff=0.6)
-        if close_matches:
-            best_match_question = close_matches[0]
-            for route, items in intent_data.items():
-                for item in items:
-                    if item['question'].lower() == best_match_question:
-                        return item['answer'], best_score * 100
-
     return None, 0.0
 
 def classify_faq(user_query, faq_tensor_embeddings, questions, faq_data, threshold=0.7):
@@ -103,16 +107,9 @@ def classify_faq(user_query, faq_tensor_embeddings, questions, faq_data, thresho
             for item in faqs:
                 if item['question'].lower() == best_match_question:
                     return item['answer'], best_score * 100
-    else:
-        close_matches = get_close_matches(user_query, questions, n=1, cutoff=0.6)
-        if close_matches:
-            best_match_question = close_matches[0]
-            for section, faqs in faq_data.items():
-                for item in faqs:
-                    if item['question'].lower() == best_match_question:
-                        return item['answer'], best_score * 100
-
     return None, 0.0
+
+
 
 def parse_user_input(user_input):
     match = re.search(r'from (.+?) to (.+)', user_input, re.IGNORECASE)
@@ -128,6 +125,7 @@ def correct_station_name(station_name):
     if matches:
         return matches[0]
     return station_name
+
 
 def fetch_route_and_fare(from_station, to_station):
     params = {
@@ -149,50 +147,56 @@ def save_to_database(table_name, question, answer):
     connection.commit()
     connection.close()
 
+
 def call_groq_api(user_query):
-    metro_hint = "This is related to metro services in Delhi. Please focus only on Indian Delhi-specific metro details and answers should be simple and short."
+    metro_hint = "This is related to metro services in Delhi. Please focus only on Indian Delhi-specific metro details and answers should be simple and short and give in single or double line. If this query is not related to the Delhi Metro."
 
     try:
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": f"{user_query}. {metro_hint}"}],
             model="llama3-8b-8192",
-            temperature=0.1 
+            temperature=0.1  # Lower temperature for deterministic output
         )
         answer = chat_completion.choices[0].message.content.strip()
 
+        # Check if the answer says it's unrelated to Delhi Metro and respond accordingly
         if "Please ask Delhi Metro-related questions" in answer:
             return "Please ask Delhi Metro-related questions."
-
+        
+        # Save to database (FAQ or Intent depending on query)
         if any(keyword in user_query.lower() for keyword in FAQ_KEYWORDS):
             save_to_database("cleaned_faqs", user_query, answer)
         else:
             save_to_database("cleaned_intent", user_query, answer)
-
         return answer
 
     except Exception as e:
         return f"Error with Groq API: {str(e)}"
 
+# Generate related questions using Groq API
 def generate_related_questions(user_query):
+    """Generate three related questions using the Groq API based on the user query."""
     try:
-        metro_hint = "This is related to metro services. Please generate 3 simple questions based on the following query."
+        metro_hint = "This is related to metro services. Please generate 3 simple questions based on the following query. Make sure the questions are specific to Delhi Metro. Questions should be simple and short"
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": f"{user_query}. {metro_hint}"}],
             model="llama3-8b-8192",
-            temperature=0.1  
+            temperature=0.1  # Lower temperature for deterministic output
         )
         generated_text = chat_completion.choices[0].message.content.strip()
-        questions = re.findall(r'\d+\.\s*(.+)', generated_text)
-        return questions[:3]
+        questions = re.findall(r'\d+\.\s*(.+)', generated_text)  # Extract numbered questions
+        return questions[:3]  # Return the top 3 questions
     except Exception as e:
         return [f"Error generating questions: {str(e)}"]
 
+# Prompt user to select one of the generated questions
 def prompt_user_for_question_selection(questions):
+    """Prompt the user to select one of the generated questions."""
     print("Please select one of the following questions:")
     for idx, question in enumerate(questions, 1):
-        print(f"{idx}. {question}")
+        yield f"{idx}. {question}"
     print("4. None of these")
-
+    
     while True:
         user_selection = input("Pick One: ").strip()
         if user_selection in ['1', '2', '3', '4']:
@@ -200,11 +204,11 @@ def prompt_user_for_question_selection(questions):
         else:
             print("Invalid input. Please select 1, 2, 3, or 4.")
 
-# Search for an answer in the database
+
 def search_in_database(question):
     connection = connect_db()
     cursor = connection.cursor(dictionary=True)
-    query = "SELECT answer FROM metro_chatbot.cleaned_faqs WHERE question = %s UNION SELECT answer FROM metro_chatbot.cleaned_intent WHERE question = %s"
+    query = "SELECT answer FROM metro_chatbot.cleaned_faqs WHERE question = %s UNION SELECT answer FROM chatbot.cleaned_intent WHERE question = %s"
     cursor.execute(query, (question, question))
     result = cursor.fetchone()
     connection.close()
@@ -220,84 +224,63 @@ ROUTE_KEYWORDS = [
     "Reach destination on metro", "Navigate metro route from", "Metro transfer route to", "Explore metro route to"
 ]
 
+def stream_response(query_generator):
+    """Stream response chunks to the client."""
+    for chunk in query_generator:
+        yield chunk
+        yield "\n"  # Separate chunks for better client-side processing.
 
-def handle_query_with_suggestion(user_id, query):
-    """Main query handler with related question suggestion functionality."""
-    
-    # Initialize user session if not already present
-    if user_id not in user_sessions:
-        user_sessions[user_id] = {'last_query': '', 'related_questions_cache': {}}
-    
-    # Check if the query contains route information
-    from_station, to_station = parse_user_input(query)
-    if from_station and to_station:
-        # Correct and validate station names
-        from_station = correct_station_name(from_station)
-        to_station = correct_station_name(to_station)
-        
-        # Fetch route and fare
-        route_data = fetch_route_and_fare(from_station, to_station)
+def query_generator(query_result):
+    """Generate chunks of the query result for streaming."""
+    for line in query_result.split('. '):  # Break into chunks by sentences
+        yield line + '.'
 
-        if "error" in route_data:
-            return {"error": route_data['error']}
-        else:
-            if 'full_route' in route_data:
-                return {
-                    "response": f"Route from {from_station} to {to_station}: {route_data['full_route']} Fare: ₹{route_data['total_fare']}"
-                }
-            else:
-                return {"response": "No route found between the provided stations."}
-    
-    # Default fallback to process FAQ or intent-based query
-    is_faq = query.lower().split()[0] in FAQ_KEYWORDS
 
-    if is_faq:
-        faq_data = fetch_faqs()
-        faq_questions = [item['question'].lower() for section in faq_data for item in faq_data[section]]
-        faq_tensor_embeddings = get_sentence_embeddings(faq_questions)
-        answer, similarity = classify_faq(query, faq_tensor_embeddings, faq_questions, faq_data)
 
-        if similarity < 70:
-            answer = call_groq_api(query)
-            save_to_database("cleaned_faqs", query, answer)
-        return {"response": answer}
-    else:
-        intent_data = fetch_intents()
-        intent_questions = [item['question'].lower() for route in intent_data for item in intent_data[route]]
-        intent_tensor_embeddings = get_sentence_embeddings(intent_questions)
-        answer, similarity = classify_intent(query, intent_tensor_embeddings, intent_data, intent_questions)
+# Helper: Check similarity between two strings
+def is_similar(a, b, threshold=0.8):
+    return SequenceMatcher(None, a, b).ratio() >= threshold
 
-        if similarity < 70:
-            answer = call_groq_api(query)
-            save_to_database("cleaned_intent", query, answer)
-        return {"response": answer}
+# Helper: Fetch last response from the database
+def get_last_response_from_db(user_id):
+    connection = connect_db()
+    cursor = connection.cursor(dictionary=True)
+    # Fetch the latest response for the given user_id by ordering by the primary key id in descending order
+    query = "SELECT chatbot_response FROM metro_chatbot.chatbot_conversations WHERE user_id = %s ORDER BY id DESC LIMIT 1"
+    cursor.execute(query, (user_id,))
+    result = cursor.fetchone()
+    connection.close()
+    return result['chatbot_response'] if result else None
 
-    """Main query handler with related question suggestion functionality."""
-    
-    # Initialize user session if not already present
-    if user_id not in user_sessions:
-        user_sessions[user_id] = {'last_query': '', 'related_questions_cache': {}}
-    
-    # Initialization moved here
-    count = 0
-    step = 1
-    print("Welcome to the Metro Chatbot! Type 'exit' to end the chat.")
-    user_name = user_id  # Assume user_name is equivalent to user_id for personalization
-    print(f"Nice to meet you, {user_name}! How can I assist you with the Delhi Metro today?")
-    
-    while True:
-        query = input(f"{user_name}: ").strip()  # Capture user input with their name as prompt
-        if count < step:
-            count += 1
+ # Helper: Fetch last response from the database
+def route_from_db(user_id):
+    connection = connect_db()
+    cursor = connection.cursor(dictionary=True)
+    # Fetch the latest response for the given user_id by ordering by the primary key id in descending order
+    query = "SELECT user_query FROM metro_chatbot.chatbot_conversations WHERE user_id = %s ORDER BY id DESC LIMIT 1"
+    cursor.execute(query, (user_id,))
+    result = cursor.fetchone()
+    connection.close()
+    return result['user_query'] if result else None
+ 
 
-        if query.lower() == 'exit':
-            print("Goodbye!")
-            break
+def handle_query_with_stream(user_id, query, chatbot_response, report_decision=None):
+    """Handles user queries, including route, FAQ, intent classification, and suggestions for related questions."""
+    try:
+        chatbot_response = get_last_response_from_db(user_id)
 
+        # Initialize user session if not already present
+        if user_id not in user_sessions:
+            user_sessions[user_id] = {"last_step": "", "last_station": "", "related_questions_cache": {}}
+
+        session_state = user_sessions[user_id]
+        session_state['last_query'] = query  # Store the current query as the last query
+
+        # Process based on the current state
         # Parse input to check for source and destination stations
         from_station, to_station = parse_user_input(query)
-        
-        # Check if both source and destination were provided in the initial query
+    
+    # Check if both source and destination were provided in the initial query
         if from_station and to_station:
             # Correct and validate station names
             from_station = correct_station_name(from_station)
@@ -305,7 +288,7 @@ def handle_query_with_suggestion(user_id, query):
             
             # Fetch and display route and fare data directly
             route_data = fetch_route_and_fare(from_station, to_station)
-
+    
             if "error" in route_data:
                 print(f"Error fetching route and fare: {route_data['error']}")
             else:
@@ -314,102 +297,150 @@ def handle_query_with_suggestion(user_id, query):
                     print(f"Fare: ₹{route_data['total_fare']}")
                 else:
                     print("No route found between the provided stations.")
-            return 
+            return  # End the function here to avoid additional question prompts
 
-    # If only partial travel information (like "I want to travel") is given, prompt for details
+        # If only partial travel information (like "I want to travel") is given, prompt for details
         elif any(keyword in query.lower() for keyword in ["travel", "route", "go", "navigate"]):
-          print("Bot: What is your source station?")
-        from_station = input(f"{user_id}: ").strip()
+            if any(keyword in query.lower() for keyword in ["travel", "route", "go", "navigate"]):
+            
+                yield "What is your source station?"
+                return
+            
+            if chatbot_response and isinstance(chatbot_response, str):
+                if is_similar(chatbot_response.lower(), "What is your source station?"):
+                    yield "What is your destination station?"
+                    return
+            
+
+            if chatbot_response and isinstance(chatbot_response, str):
+                if is_similar(chatbot_response.lower(), "What is your destination station?"):
+                    to_station = query
+                    from_station = route_from_db(user_id)
         
-        print("Bot: What is your destination station?")
-        to_station = input(f"{user_id}: ").strip()
+                # Fetch and display route and fare data after getting complete information
+                route_data = fetch_route_and_fare(from_station, to_station)
+    
+                if "error" in route_data:
+                    yield f"Error fetching route and fare: {route_data['error']}"
+                else:
+                    if 'full_route' in route_data:
+                        yield f"Route from {from_station} to {to_station}: {route_data['full_route']}"
+                        yield f"Fare: ₹{route_data['total_fare']}"
+                    else:
+                        yield "No route found between the provided stations."
+                return  # End the function here to avoid additional question prompts
+        
+ # Check if it's a lost item query
+        if any(keyword in query.lower() for keyword in ['lost', 'theft', 'stolen']):
+                user_sessions[user_id]['last_query'] = query
+                yield f"Which was the last station you were at?"
+                return  # Wait for the response for last_station
 
-        # Fetch and display route and fare data after getting complete information
-        route_data = fetch_route_and_fare(from_station, to_station)
+        if chatbot_response and isinstance(chatbot_response, str):
+            if is_similar(chatbot_response.lower(), "Which was the last station you were at?"):
+                yield "Do you want to report your lost or stolen item? (yes/no)"
+                return
 
-        if "error" in route_data:
-            print(f"Error fetching route and fare: {route_data['error']}")
+        # If report_decision is provided, complete the lost item reporting process
+        if chatbot_response and isinstance(chatbot_response, str):
+            if is_similar(chatbot_response.lower(), "Do you want to report your lost or stolen item? (yes/no)"):
+                groq_query = f"I lost my item . Can you guide me on how to report it to the Delhi Metro authorities?"
+                report_info = call_groq_api(groq_query)
+                yield f"Bot: {report_info}"
+                return
+
+
+# 2. Determine if query is an FAQ or intent-based query
+        is_faq = query.lower().split()[0] in FAQ_KEYWORDS
+
+        if is_faq:
+            yield "Processing your query as a FAQ..."
+
+            # Fetch FAQ data and process it
+            faq_data = fetch_faqs()
+            faq_questions = [item['question'].lower() for section in faq_data for item in faq_data[section]]
+            faq_tensor_embeddings = get_sentence_embeddings(faq_questions)
+
+            answer, similarity = classify_faq(query, faq_tensor_embeddings, faq_questions, faq_data)
+            yield f"Identified FAQ answer with similarity {similarity:.2f}%"
+
+            # If similarity is low, use Groq API
+            if similarity < 70:
+                yield "The query is not matching closely with existing FAQs. Fetching an answer from an external API..."
+                answer = call_groq_api(query)
+                save_to_database("cleaned_faqs", query, answer)
+
+            yield answer
+            return
+
         else:
-            if 'full_route' in route_data:
-                print(f"Route from {from_station} to {to_station}: {route_data['full_route']}")
-                print(f"Fare: ₹{route_data['total_fare']}")
+            yield "Processing your query as an intent..."
+
+            # Fetch intent data and process it
+            intent_data = fetch_intents()
+            intent_questions = [item['question'].lower() for route in intent_data for item in intent_data[route]]
+            intent_tensor_embeddings = get_sentence_embeddings(intent_questions)
+
+            answer, similarity = classify_intent(query, intent_tensor_embeddings, intent_data, intent_questions)
+            yield f"Identified intent answer with similarity {similarity:.2f}%"
+
+            # If similarity is low, use Groq API
+            if similarity < 70:
+                yield "The query is not matching closely with existing intents. Fetching an answer from an external API..."
+                answer = call_groq_api(query)
+                save_to_database("cleaned_intent", query, answer)
+
+            yield answer
+            
+            
+            # 3. Generate related questions for further engagement
+            if query not in user_sessions[user_id]['related_questions_cache']:
+                related_questions = generate_related_questions(query)
+                user_sessions[user_id]['related_questions_cache'][query] = related_questions
             else:
-                print("No route found between the provided stations.")
-        return  # End the function here to avoid additional question prompts
-
-    # Check if the first word of the query is in FAQ_KEYWORDS
-    first_word = query.lower().split()[0]
-    is_faq = first_word in FAQ_KEYWORDS
-
-    if is_faq:
-        # Load FAQ data and embeddings
-        faq_data = fetch_faqs()
-        faq_questions = [item['question'].lower() for section in faq_data for item in faq_data[section]]
-        faq_tensor_embeddings = get_sentence_embeddings(faq_questions)
-        
-        # Classify FAQ
-        answer, similarity = classify_faq(query, faq_tensor_embeddings, faq_questions, faq_data)
-        
-        # If similarity score is below the threshold, call Groq API
-        if similarity < 70:  # 70 is 0.7 threshold in percentage
-            print(f"Bot: No exact match found in FAQ. Fetching answer from Groq API...")
-            answer = call_groq_api(query)
-            save_to_database("cleaned_faqs", query, answer)  # Save Groq-generated answer to FAQ DB
-        else:
-            print(f"Bot: {answer} (Similarity: {similarity:.2f}%)")
-    else:
-        # Handle as an intent-based query if not FAQ
-        intent_data = fetch_intents()
-        intent_questions = [item['question'].lower() for route in intent_data for item in intent_data[route]]
-        intent_tensor_embeddings = get_sentence_embeddings(intent_questions)
-        
-        # Classify Intent
-        answer, similarity = classify_intent(query, intent_tensor_embeddings, intent_data, intent_questions)
-        
-        if similarity < 70:
-            print(f"Bot: No exact match found in Intent. Fetching answer from Groq API...")
-            answer = call_groq_api(query)
-            save_to_database("cleaned_intent", query, answer)  # Save Groq-generated answer to Intent DB
-        else:
-            print(f"Bot: {answer} (Similarity: {similarity:.2f}%)")
-
-    # Skip generating related questions when route and fare information is provided
-    if not is_faq:
-        if query in user_sessions[user_id]['related_questions_cache']:
-            related_questions = user_sessions[user_id]['related_questions_cache'][query]
-        elif query in user_sessions[user_id]['related_questions_cache']:
-            print(f"Bot: No exact match found in Intent. Fetching answer from Groq API...")
-            #continue
-        else:
-            related_questions = generate_related_questions(query)
-            user_sessions[user_id]['related_questions_cache'][query] = related_questions
-
-        selected_option = prompt_user_for_question_selection(related_questions)
-
-        if selected_option == 4:
-            print("Bot: Session ended. Starting a new conversation.")
-        else:
-            selected_question = related_questions[selected_option - 1]
-            cached_answer = search_in_database(selected_question)
-            if cached_answer:
-                print(f"Bot: {cached_answer}")
+                related_questions = user_sessions[user_id]['related_questions_cache'][query]
+    
+            yield "Here are some related questions you might find helpful:"
+            for idx, question in enumerate(related_questions, start=1):
+                yield f"{idx}. {question}"
+            yield "4. End Session"
+    
+        # 4. Handle related questions suggestion
+            selected_option = prompt_user_for_question_selection(related_questions)
+            if selected_option == 4:  # Assume 4 is the "End Session" option
+                yield "Session ended. Thank you for your query."
+                return
             else:
-                groq_answer = call_groq_api(selected_question)
-                print(f"Bot: {groq_answer}")
+                selected_question = related_questions[selected_option - 1]
+                yield f"You selected: {selected_question}"
 
+                # Search database for the selected question's answer
+                cached_answer = search_in_database(selected_question)
+                if cached_answer:
+                    yield cached_answer
+                    return
+                else:
+                    yield "Fetching answer for the selected question..."
+                    groq_answer = call_groq_api(selected_question)
+                    yield groq_answer
+                    return
+
+
+    except Exception as e:
+        yield f"An error occurred while processing your query: {e}"
 
 # Helper function to store query and response in MySQL
-def store_conversation(user_query, chatbot_response):
+def store_conversation(user_query, chatbot_response, user_id):
     try:
         # Connect to MySQL database
         connection = connect_db()
         cursor = connection.cursor()
 
         # SQL query to insert the conversation into the table (without user_id)
-        sql_query = "INSERT INTO chatbot_conversations (user_query, chatbot_response) VALUES (%s, %s)"
+        sql_query = "INSERT INTO metro_chatbot.chatbot_conversations (user_query, chatbot_response, user_id) VALUES (%s, %s, %s)"
         
         # Execute the query with user_query and chatbot_response
-        cursor.execute(sql_query, (user_query, chatbot_response))
+        cursor.execute(sql_query, (user_query, chatbot_response, user_id))
 
         # Commit the transaction
         connection.commit()
@@ -423,34 +454,36 @@ def store_conversation(user_query, chatbot_response):
             connection.close()
 
 @app.route('/query', methods=['POST'])
-def handle_query_route():
+def handle_streaming_query():
     try:
         user_input = request.json.get('message', '').strip()
         user_id = request.json.get('user_id', '').strip()
 
         if not user_input:
             return jsonify({"error": "No query provided."}), 400
-
         if not user_id:
             return jsonify({"error": "No user_id provided."}), 400
 
-        response = handle_query_with_suggestion(user_id, user_input)
+        # Retrieve current state (if any)
+        last_station = user_sessions.get(user_id, {}).get('last_station')
+        report_decision = user_sessions.get(user_id, {}).get('report_decision')
+
+        # Generate the chatbot response (assuming handle_query_with_stream yields responses)
+        response_chunks = []
+        for chunk in handle_query_with_stream(user_id, user_input, last_station, report_decision):
+            response_chunks.append(chunk)
+        chatbot_response = ''.join(response_chunks)
 
         # Save conversation to DB
-        store_conversation(user_input, response['response'])
+        store_conversation(user_input, chatbot_response, user_id)
 
-        return jsonify(response)
+        # Stream the response
+        return Response(stream_with_context(response_chunks), content_type='text/plain')
+
     except Exception as e:
-        logging.error(f"Error handling query route: {e}")
+        logging.error(f"Error in streaming query handler: {e}")
         return jsonify({"error": "An internal error occurred."}), 500
-@app.route('/')
-def hello():
-    return "Hello, World!"
 
-
-
-# Main entry point
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     app.run(port=5001, debug=True)
-
