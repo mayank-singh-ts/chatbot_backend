@@ -20,7 +20,7 @@ CORS(app)
 
 CORS(app, resources={r"/query": {"origins": "http://13.49.68.219/"}})
 # Dictionary to store user sessions, keeping track of their last question and related questions cache
-user_sessions = {}
+user_sessions = {} 
 
 # Initialize Groq client
 client = Groq(api_key="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")
@@ -263,7 +263,6 @@ def route_from_db(user_id):
     connection.close()
     return result['user_query'] if result else None
  
-
 def handle_query_with_stream(user_id, query, chatbot_response, report_decision=None):
     """Handles user queries, including route, FAQ, intent classification, and suggestions for related questions."""
     try:
@@ -301,22 +300,22 @@ def handle_query_with_stream(user_id, query, chatbot_response, report_decision=N
 
         # If only partial travel information (like "I want to travel") is given, prompt for details
         elif any(keyword in query.lower() for keyword in ["travel", "route", "go", "navigate"]):
-            if any(keyword in query.lower() for keyword in ["travel", "route", "go", "navigate"]):
-            
-                yield "What is your source station?"
+            yield "What is your source station?"
+            return
+        
+        if chatbot_response and isinstance(chatbot_response, str):
+            similarity_score = is_similar(chatbot_response.lower(), "What is your source station?")
+        if similarity_score >= 0.8:
+                yield "What is your destination station?"
                 return
             
-            if chatbot_response and isinstance(chatbot_response, str):
-                if is_similar(chatbot_response.lower(), "What is your source station?"):
-                    yield "What is your destination station?"
-                    return
-            
 
-            if chatbot_response and isinstance(chatbot_response, str):
-                if is_similar(chatbot_response.lower(), "What is your destination station?"):
-                    to_station = query
-                    from_station = route_from_db(user_id)
-        
+        if chatbot_response and isinstance(chatbot_response, str):
+            similarity_score = is_similar(chatbot_response.lower(), "What is your destination station?")
+        if similarity_score >= 0.8:
+                to_station = query
+                from_station = route_from_db(user_id)
+    
                 # Fetch and display route and fare data after getting complete information
                 route_data = fetch_route_and_fare(from_station, to_station)
     
@@ -328,33 +327,36 @@ def handle_query_with_stream(user_id, query, chatbot_response, report_decision=N
                         yield f"Fare: ₹{route_data['total_fare']}"
                     else:
                         yield "No route found between the provided stations."
-                return  # End the function here to avoid additional question prompts
+                    return  # End the function here to avoid additional question prompts
         
  # Check if it's a lost item query
         if any(keyword in query.lower() for keyword in ['lost', 'theft', 'stolen']):
                 user_sessions[user_id]['last_query'] = query
                 yield f"Which was the last station you were at?"
-                return  # Wait for the response for last_station
+                return  # Wait for the response for `last_station`
 
         if chatbot_response and isinstance(chatbot_response, str):
-            if is_similar(chatbot_response.lower(), "Which was the last station you were at?"):
+            similarity_score = is_similar(chatbot_response.lower(), "Which was the last station you were at?")
+        if similarity_score >= 0.8:
                 yield "Do you want to report your lost or stolen item? (yes/no)"
                 return
 
-        # If report_decision is provided, complete the lost item reporting process
+
+        # If `report_decision` is provided, complete the lost item reporting process
         if chatbot_response and isinstance(chatbot_response, str):
-            if is_similar(chatbot_response.lower(), "Do you want to report your lost or stolen item? (yes/no)"):
-                groq_query = f"I lost my item . Can you guide me on how to report it to the Delhi Metro authorities?"
+            similarity_score = is_similar(chatbot_response.lower(), "Do you want to report your lost or stolen item? (yes/no)")
+        if similarity_score >= 0.8:
+                station = route_from_db(user_id)
+                groq_query = f"I lost my item at {station}. Can you guide me on how to report it to the Delhi Metro authorities?"
                 report_info = call_groq_api(groq_query)
                 yield f"Bot: {report_info}"
                 return
 
 
-# 2. Determine if query is an FAQ or intent-based query
+        # 2. Determine if query is an FAQ or intent-based query
         is_faq = query.lower().split()[0] in FAQ_KEYWORDS
 
         if is_faq:
-            yield "Processing your query as a FAQ..."
 
             # Fetch FAQ data and process it
             faq_data = fetch_faqs()
@@ -362,11 +364,9 @@ def handle_query_with_stream(user_id, query, chatbot_response, report_decision=N
             faq_tensor_embeddings = get_sentence_embeddings(faq_questions)
 
             answer, similarity = classify_faq(query, faq_tensor_embeddings, faq_questions, faq_data)
-            yield f"Identified FAQ answer with similarity {similarity:.2f}%"
 
             # If similarity is low, use Groq API
             if similarity < 70:
-                yield "The query is not matching closely with existing FAQs. Fetching an answer from an external API..."
                 answer = call_groq_api(query)
                 save_to_database("cleaned_faqs", query, answer)
 
@@ -374,7 +374,6 @@ def handle_query_with_stream(user_id, query, chatbot_response, report_decision=N
             return
 
         else:
-            yield "Processing your query as an intent..."
 
             # Fetch intent data and process it
             intent_data = fetch_intents()
@@ -382,11 +381,9 @@ def handle_query_with_stream(user_id, query, chatbot_response, report_decision=N
             intent_tensor_embeddings = get_sentence_embeddings(intent_questions)
 
             answer, similarity = classify_intent(query, intent_tensor_embeddings, intent_data, intent_questions)
-            yield f"Identified intent answer with similarity {similarity:.2f}%"
 
             # If similarity is low, use Groq API
             if similarity < 70:
-                yield "The query is not matching closely with existing intents. Fetching an answer from an external API..."
                 answer = call_groq_api(query)
                 save_to_database("cleaned_intent", query, answer)
 
@@ -420,14 +417,14 @@ def handle_query_with_stream(user_id, query, chatbot_response, report_decision=N
                     yield cached_answer
                     return
                 else:
-                    yield "Fetching answer for the selected question..."
                     groq_answer = call_groq_api(selected_question)
                     yield groq_answer
                     return
 
 
     except Exception as e:
-        yield f"An error occurred while processing your query: {e}"
+        print(e)
+
 
 # Helper function to store query and response in MySQL
 def store_conversation(user_query, chatbot_response, user_id):
