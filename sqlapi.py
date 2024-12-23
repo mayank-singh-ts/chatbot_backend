@@ -9,7 +9,7 @@ def connect_db():
         host="metrochatbot.cliqswukc30i.eu-north-1.rds.amazonaws.com",
         user="admin",
         password="Mayank2503",
-        database="metro_chatbot"
+        database="chat_bot"
     )
     return connection
 
@@ -18,7 +18,7 @@ def connect_db():
 def get_faqs():
     connection = connect_db()
     cursor = connection.cursor(dictionary=True)     
-    cursor.execute("SELECT question, answer FROM metro_chatbot.cleaned_faqs")
+    cursor.execute("SELECT question, answer FROM chat_bot.cleaned_faqs")
     faqs = cursor.fetchall()
     connection.close()
     
@@ -30,7 +30,7 @@ def get_faqs():
 def get_intents():
     connection = connect_db()
     cursor = connection.cursor(dictionary=True)
-    cursor.execute("SELECT question, answer FROM metro_chatbot.cleaned_intent")
+    cursor.execute("SELECT question, answer FROM chat_bot.cleaned_intent")
     intents = cursor.fetchall()
     connection.close()
 
