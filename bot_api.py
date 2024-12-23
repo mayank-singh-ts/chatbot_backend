@@ -57,7 +57,7 @@ def connect_db():
         host="metrochatbot.cliqswukc30i.eu-north-1.rds.amazonaws.com",
         user="admin",
         password="Mayank2503",
-        database="metro_chatbot"
+        database="chat_bot"
     )
     return connection
 
