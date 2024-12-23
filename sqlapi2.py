@@ -9,7 +9,7 @@ def get_db_connection():
         host="metrochatbot.cliqswukc30i.eu-north-1.rds.amazonaws.com",  # Use 'localhost' if MySQL is on your local machine
         user="admin",
         password="Mayank2503",
-        database='chatbot_1'  # Ensure this database exists
+        database='chat_bot'  # Ensure this database exists
     )
     return connection
 
