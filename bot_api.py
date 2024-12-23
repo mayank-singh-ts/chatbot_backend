@@ -49,8 +49,6 @@ FAQ_KEYWORDS = [
 FAQ_API_URL = "http://13.49.68.219:8080/faqs"
 INTENT_API_URL = "http://13.49.68.219:8080/intents"
 ROUTE_API_URL = "http://13.49.68.219:5000/get_route_and_fare"
-
-
 def connect_db():
     """MySQL connection for saving answers"""
     connection = mysql.connector.connect(
@@ -336,7 +334,7 @@ def handle_query_with_stream(user_id, query):
         if any(keyword in query.lower() for keyword in ['lost', 'theft', 'stolen']):
                 user_sessions[user_id]['last_query'] = query
                 yield f"Which was the last station you were at?"
-                return  # Wait for the response for `last_station`
+                return  # Wait for the response for last_station
 
         if chatbot_response and isinstance(chatbot_response, str):
             similarity_score = is_similar(chatbot_response.lower(), "Which was the last station you were at?")
@@ -345,16 +343,71 @@ def handle_query_with_stream(user_id, query):
                 return
 
 
-        # If `report_decision` is provided, complete the lost item reporting process
+        # If report_decision is provided, complete the lost item reporting process
         if chatbot_response and isinstance(chatbot_response, str):
             similarity_score = is_similar(chatbot_response.lower(), "Do you want to report your lost or stolen item? (yes/no)")
         if similarity_score >= 0.8:
+            if query.lower() == "yes":
                 station = route_from_db(user_id)
                 groq_query = f"I lost my item at {station}. Can you guide me on how to report it to the Delhi Metro authorities?"
                 report_info = call_groq_api(groq_query)
                 yield f"Bot: {report_info}"
+            return
+# ------------------------------------------------------------------------------------------------------------------
+# This part is added by Abhay on 22-dec-2024
+# ------------------------------------------------------------------------------------------------------------------
+        if any(keyword in query.lower() for keyword in ['park', 'parking']):
+                user_sessions[user_id]['last_query'] = query
+                yield f"Which station are you looking to park at?"
+                return  # Wait for the response for last_station
+
+        if chatbot_response and isinstance(chatbot_response, str):
+            similarity_score = is_similar(chatbot_response.lower(), "Which station are you looking to park at?")
+        if similarity_score >= 0.9:
+                yield "Do you want to know is parking is available or not? (yes/no)"
                 return
 
+
+        # If report_decision is provided, complete the lost item reporting process
+        if chatbot_response and isinstance(chatbot_response, str):
+            similarity_score = is_similar(chatbot_response.lower(), "Do you want to know is parking is available or not? (yes/no)")
+        if similarity_score >= 0.9:
+            if query.lower() == "yes":
+                station = route_from_db(user_id)
+                groq_query = f"I looking for parking at {station}. Can you guide me what is the process to park my vechicle and is parking available at that station and what is the fare or fine to park my vechical?"
+                report_info = call_groq_api(groq_query)
+                yield f"Bot: {report_info}"
+            return
+            
+# ------------------------------------------------------------------------------------------------------------------
+
+
+        if any(keyword in query.lower() for keyword in ['fire', 'emergency', 'accident']):
+                user_sessions[user_id]['last_query'] = query
+                yield f"Which station are you looking for emergency exit information?"
+                return  # Wait for the response for last_station
+
+        if chatbot_response and isinstance(chatbot_response, str):
+            similarity_score = is_similar(chatbot_response.lower(), "Which station are you looking for emergency exit information?")
+        if similarity_score >= 0.9:
+                yield "Do you want to know exit information for emergency? (yes/no)"
+                return
+
+
+        # If report_decision is provided, complete the lost item reporting process
+        if chatbot_response and isinstance(chatbot_response, str):
+            similarity_score = is_similar(chatbot_response.lower(), "Do you want to know exit information for emergency? (yes/no)")
+        if similarity_score >= 0.9:
+            if query.lower() == "yes":
+                station = route_from_db(user_id)
+                groq_query = f"I looking for emergency at {station} metro station. Can you guide me what to do in case of emergency and where is the exit gate for emergency?"
+                report_info = call_groq_api(groq_query)
+                yield f"Bot: {report_info}"
+            return
+
+# ------------------------------------------------------------------------------------------------------------------
+# Here it END
+# ------------------------------------------------------------------------------------------------------------------
 
         # 2. Determine if query is an FAQ or intent-based query
         is_faq = query.lower().split()[0] in FAQ_KEYWORDS
@@ -524,7 +577,7 @@ def call_webhook_endpoint():
 
                 #response = await botApiService(payload)
                 #Respond back with the same message
-            #await sendMessage(from, `You said: "${response}"`);
+            #await sendMessage(from, You said: "${response}");
         
             # Respond with a 200 OK status
             return jsonify({"status": "success"}), 200
@@ -569,9 +622,6 @@ def whatsapp_service(payload):
         "type": "text",
         "text": {"body": payload['botResponse']},
     }
-
-    #print("Payload:", payload)
-    
     # Try to send the request
     try:
         response = requests.post(url, json=payload, headers=headers)
