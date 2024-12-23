@@ -1,17 +1,17 @@
+# whats app file hai yee
 import logging
 import os
 import requests
 import torch
 from sentence_transformers import SentenceTransformer, util
 import re
-import warnings
 from difflib import get_close_matches
 from groq import Groq
 import mysql.connector
 from flask_cors import CORS
 from flask import Flask, request, jsonify, session, Response, stream_with_context
 from difflib import SequenceMatcher
-
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Flask App Configuration
 app = Flask(__name__)
@@ -20,7 +20,7 @@ CORS(app)
 
 CORS(app, resources={r"/query": {"origins": "http://13.49.68.219/"}})
 # Dictionary to store user sessions, keeping track of their last question and related questions cache
-user_sessions = {} 
+user_sessions = {}
 
 # Initialize Groq client
 client = Groq(api_key="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")
@@ -49,6 +49,7 @@ FAQ_KEYWORDS = [
 FAQ_API_URL = "http://13.49.68.219:8080/faqs"
 INTENT_API_URL = "http://13.49.68.219:8080/intents"
 ROUTE_API_URL = "http://13.49.68.219:5000/get_route_and_fare"
+
 
 def connect_db():
     """MySQL connection for saving answers"""
@@ -142,7 +143,7 @@ def fetch_route_and_fare(from_station, to_station):
 def save_to_database(table_name, question, answer):
     connection = connect_db()
     cursor = connection.cursor()
-    query = f"INSERT INTO metro_chatbot.{table_name} (question, answer) VALUES (%s, %s)"
+    query = f"INSERT INTO chat_bot.{table_name} (question, answer) VALUES (%s, %s)"
     cursor.execute(query, (question, answer))
     connection.commit()
     connection.close()
@@ -208,7 +209,7 @@ def prompt_user_for_question_selection(questions):
 def search_in_database(question):
     connection = connect_db()
     cursor = connection.cursor(dictionary=True)
-    query = "SELECT answer FROM metro_chatbot.cleaned_faqs WHERE question = %s UNION SELECT answer FROM chatbot.cleaned_intent WHERE question = %s"
+    query = "SELECT answer FROM chat_bot.cleaned_faqs WHERE question = %s UNION SELECT answer FROM chat_bot.cleaned_intent WHERE question = %s"
     cursor.execute(query, (question, question))
     result = cursor.fetchone()
     connection.close()
@@ -246,7 +247,7 @@ def get_last_response_from_db(user_id):
     connection = connect_db()
     cursor = connection.cursor(dictionary=True)
     # Fetch the latest response for the given user_id by ordering by the primary key id in descending order
-    query = "SELECT chatbot_response FROM metro_chatbot.chatbot_conversations WHERE user_id = %s ORDER BY id DESC LIMIT 1"
+    query = "SELECT chatbot_response FROM chat_bot.chatbot_conversations WHERE user_id = %s ORDER BY id DESC LIMIT 1"
     cursor.execute(query, (user_id,))
     result = cursor.fetchone()
     connection.close()
@@ -257,17 +258,19 @@ def route_from_db(user_id):
     connection = connect_db()
     cursor = connection.cursor(dictionary=True)
     # Fetch the latest response for the given user_id by ordering by the primary key id in descending order
-    query = "SELECT user_query FROM metro_chatbot.chatbot_conversations WHERE user_id = %s ORDER BY id DESC LIMIT 1"
+    query = "SELECT user_query FROM chat_bot.chatbot_conversations WHERE user_id = %s ORDER BY id DESC LIMIT 1"
     cursor.execute(query, (user_id,))
     result = cursor.fetchone()
     connection.close()
     return result['user_query'] if result else None
  
-def handle_query_with_stream(user_id, query, chatbot_response, report_decision=None):
+
+
+def handle_query_with_stream(user_id, query):
     """Handles user queries, including route, FAQ, intent classification, and suggestions for related questions."""
     try:
         chatbot_response = get_last_response_from_db(user_id)
-
+        
         # Initialize user session if not already present
         if user_id not in user_sessions:
             user_sessions[user_id] = {"last_step": "", "last_station": "", "related_questions_cache": {}}
@@ -434,7 +437,7 @@ def store_conversation(user_query, chatbot_response, user_id):
         cursor = connection.cursor()
 
         # SQL query to insert the conversation into the table (without user_id)
-        sql_query = "INSERT INTO metro_chatbot.chatbot_conversations (user_query, chatbot_response, user_id) VALUES (%s, %s, %s)"
+        sql_query = "INSERT INTO chat_bot.chatbot_conversations (user_query, chatbot_response, user_id) VALUES (%s, %s, %s)"
         
         # Execute the query with user_query and chatbot_response
         cursor.execute(sql_query, (user_query, chatbot_response, user_id))
@@ -451,10 +454,14 @@ def store_conversation(user_query, chatbot_response, user_id):
             connection.close()
 
 @app.route('/query', methods=['POST'])
-def handle_streaming_query():
+def handle_streaming_query(user_id=None, user_input=None):
     try:
-        user_input = request.json.get('message', '').strip()
-        user_id = request.json.get('user_id', '').strip()
+        if(user_id and user_input):
+            user_input = user_input.strip()
+            user_id = user_id.strip()
+        else:
+            user_input = request.json.get('message', '').strip()
+            user_id = request.json.get('user_id', '').strip()
 
         if not user_input:
             return jsonify({"error": "No query provided."}), 400
@@ -467,20 +474,116 @@ def handle_streaming_query():
 
         # Generate the chatbot response (assuming handle_query_with_stream yields responses)
         response_chunks = []
-        for chunk in handle_query_with_stream(user_id, user_input, last_station, report_decision):
+        for chunk in handle_query_with_stream(user_id, user_input):
             response_chunks.append(chunk)
         chatbot_response = ''.join(response_chunks)
 
         # Save conversation to DB
         store_conversation(user_input, chatbot_response, user_id)
-
+        #print("handle_streaming_query function", user_input, chatbot_response, user_id)
         # Stream the response
+        
         return Response(stream_with_context(response_chunks), content_type='text/plain')
 
     except Exception as e:
         logging.error(f"Error in streaming query handler: {e}")
         return jsonify({"error": "An internal error occurred."}), 500
+    
+@app.route('/webhook', methods=['POST'])
+def call_webhook_endpoint():
+    try:
+        data = request.get_json()
+    
+        # Log the received data
+        print("Received POST data:")
+        print(data)
+        if(data['object']):
+            messages = data['entry'][0]['changes'][0]['value']['messages']
+            phone_number_id = data['entry'][0]['changes'][0]['value']['metadata']['phone_number_id']
+            print('phone_number_id',phone_number_id)
+            if (messages):
+                messageFrom = messages[0]['from'] #// Sender's WhatsApp ID
+                messageBody = messages[0]['text']['body'] #// Message content
+                user_id = "123"
 
+                print('eceived message from format:',messageFrom, messageBody)
+                
+                #payload = {"message": messageBody, "user_id": '123'}
+
+                botResponse = handle_streaming_query(user_id, messageBody)        
+                #print("response from chatbot",botResponse)
+
+                payload = {
+                    'messageFrom': messageFrom,
+                    'botResponse': botResponse.get_data(as_text=True),
+                    'phone_number_id': phone_number_id
+                }
+                print("payload",payload)
+
+                whatsapp_service(payload)
+
+                #response = await botApiService(payload)
+                #Respond back with the same message
+            #await sendMessage(from, `You said: "${response}"`);
+        
+            # Respond with a 200 OK status
+            return jsonify({"status": "success"}), 200
+        
+    except Exception as e:
+        logging.error(f"call_webhook_endpoint: {e}")
+        return jsonify({"error": "An internal error occurred."}), 500
+    
+@app.route('/webhook', methods=['GET'])
+def webhook_get():
+    # Retrieve all GET parameters
+    get_params = request.args.to_dict()
+
+    # Log the GET parameters
+    print("Received GET parameters:")
+    for key, value in get_params.items():
+        print(f"{key}: {value}")
+
+    # Respond to Facebook's verification challenge
+    if "hub.challenge" in get_params:
+        return get_params["hub.challenge"], 200
+
+    return "Webhook received", 200
+
+def whatsapp_service(payload):
+    # Constants
+
+    ACCESS_TOKEN='EAAyBDhP27soBO4KZCvhEM9jUOCc57Ya1ig9GGWZC6fgL7xXHVsXV8Jv2WcWTZBGNLq834pJqidZBDyIZAkhralsh4JDejO4pk65rpZAZAgIR1k99gNZBTAyeMomksQRn4MkrwkEJXi1CE35dvb8KNWEffXLW4imEkRlK83ckOriU10tG9PCyZBvHXZArCNZCo3tWJgEJaKQUeMwknvvZCm5AH3RL8uNDLa2mEgYvs8ZAWjXgWpC8ZD'
+    VERSION='v21.0'
+    PHONE_NUMBER_ID = payload['phone_number_id']
+    # URL and headers
+    url = f"https://graph.facebook.com/{VERSION}/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    
+    # Payload
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": payload['messageFrom'],
+        "type": "text",
+        "text": {"body": payload['botResponse']},
+    }
+
+    #print("Payload:", payload)
+    
+    # Try to send the request
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        response.raise_for_status()  # Raise HTTPError for bad responses (4xx and 5xx)
+        print("Message sent successfully:", response.json())
+        return response.json()  # Return response data for further handling if needed
+    except requests.exceptions.RequestException as e:
+        # Log the error
+        error_message = e.response.json() if e.response else str(e)
+        print("Error sending message:", error_message)
+        raise Exception("Failed to send message") from e
+    
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     app.run(port=5001, debug=True)
