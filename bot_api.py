@@ -1,5 +1,6 @@
-# whats app file hai yee
+#[15:56, 23/12/2024] Abhay Office Noida: # whats app file hai yee
 import logging
+import random
 import os
 import requests
 import torch
@@ -49,6 +50,7 @@ FAQ_KEYWORDS = [
 FAQ_API_URL = "http://13.49.68.219:8080/faqs"
 INTENT_API_URL = "http://13.49.68.219:8080/intents"
 ROUTE_API_URL = "http://13.49.68.219:5000/get_route_and_fare"
+
 def connect_db():
     """MySQL connection for saving answers"""
     connection = mysql.connector.connect(
@@ -265,12 +267,13 @@ def route_from_db(user_id):
 
 
 def handle_query_with_stream(user_id, query):
+    similarity_score = 0
     """Handles user queries, including route, FAQ, intent classification, and suggestions for related questions."""
     try:
         chatbot_response = get_last_response_from_db(user_id)
         
         # Initialize user session if not already present
-        if user_id not in user_sessions:
+        if user_id not in user_sessions: 
             user_sessions[user_id] = {"last_step": "", "last_station": "", "related_questions_cache": {}}
 
         session_state = user_sessions[user_id]
@@ -352,6 +355,8 @@ def handle_query_with_stream(user_id, query):
                 groq_query = f"I lost my item at {station}. Can you guide me on how to report it to the Delhi Metro authorities?"
                 report_info = call_groq_api(groq_query)
                 yield f"Bot: {report_info}"
+            else:
+                yield "Okay, let me know if you need any other help."
             return
 # ------------------------------------------------------------------------------------------------------------------
 # This part is added by Abhay on 22-dec-2024
@@ -377,6 +382,8 @@ def handle_query_with_stream(user_id, query):
                 groq_query = f"I looking for parking at {station}. Can you guide me what is the process to park my vechicle and is parking available at that station and what is the fare or fine to park my vechical?"
                 report_info = call_groq_api(groq_query)
                 yield f"Bot: {report_info}"
+            else:
+                yield "Okay, let me know if you need any other help."
             return
             
 # ------------------------------------------------------------------------------------------------------------------
@@ -403,6 +410,8 @@ def handle_query_with_stream(user_id, query):
                 groq_query = f"I looking for emergency at {station} metro station. Can you guide me what to do in case of emergency and where is the exit gate for emergency?"
                 report_info = call_groq_api(groq_query)
                 yield f"Bot: {report_info}"
+            else:
+                yield "Okay, let me know if you need any other help."
             return
 
 # ------------------------------------------------------------------------------------------------------------------
@@ -456,7 +465,7 @@ def handle_query_with_stream(user_id, query):
             yield "Here are some related questions you might find helpful:"
             for idx, question in enumerate(related_questions, start=1):
                 yield f"{idx}. {question}"
-            yield "4. End Session"
+            yield "4. End Session"  
     
         # 4. Handle related questions suggestion
             selected_option = prompt_user_for_question_selection(related_questions)
@@ -557,9 +566,13 @@ def call_webhook_endpoint():
             if (messages):
                 messageFrom = messages[0]['from'] #// Sender's WhatsApp ID
                 messageBody = messages[0]['text']['body'] #// Message content
-                user_id = "123"
-
-                print('eceived message from format:',messageFrom, messageBody)
+#-------------------------------------------------------------------------------------
+                # this line is change by mayank 12/24/2024
+#                generate_4_digit_string = lambda: str(random.randint(1000, 9999))
+#                user_id = generate_4_digit_string()
+                user_id = str(messageFrom[-4:])
+#-----------------------------------------------------------------------------------------------                                                    
+                print('Received message from format:',messageFrom, messageBody)
                 
                 #payload = {"message": messageBody, "user_id": '123'}
 
@@ -605,7 +618,7 @@ def webhook_get():
 def whatsapp_service(payload):
     # Constants
 
-    ACCESS_TOKEN='EAAyBDhP27soBO4KZCvhEM9jUOCc57Ya1ig9GGWZC6fgL7xXHVsXV8Jv2WcWTZBGNLq834pJqidZBDyIZAkhralsh4JDejO4pk65rpZAZAgIR1k99gNZBTAyeMomksQRn4MkrwkEJXi1CE35dvb8KNWEffXLW4imEkRlK83ckOriU10tG9PCyZBvHXZArCNZCo3tWJgEJaKQUeMwknvvZCm5AH3RL8uNDLa2mEgYvs8ZAWjXgWpC8ZD'
+    ACCESS_TOKEN='EAAyBDhP27soBO17ZCvnB61V7ao1EVUZBrysUtZADFRiuXvJO4Tfgol7ZBTouiB93AWWKRG6L6eZAT6yZAbZA03oRTQyas1NToEropj7USs1vCbrdZBWDRoKDVhDWzGQjJCZAK65IR2iTlunEZCJ14Mdf5ykXJhnw3MDYSfk3qZBZCExkZAc9DvrBvUXyHA1h6USZABIZATCE3Q1ZC6EITZB8mAjISGBHLL4WLk1WPdClOInyLgCtnTW8ZD'
     VERSION='v21.0'
     PHONE_NUMBER_ID = payload['phone_number_id']
     # URL and headers
@@ -622,6 +635,9 @@ def whatsapp_service(payload):
         "type": "text",
         "text": {"body": payload['botResponse']},
     }
+
+    #print("Payload:", payload)
+    
     # Try to send the request
     try:
         response = requests.post(url, json=payload, headers=headers)
