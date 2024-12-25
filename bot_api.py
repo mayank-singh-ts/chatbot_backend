@@ -1,6 +1,5 @@
 #[15:56, 23/12/2024] Abhay Office Noida: # whats app file hai yee
 import logging
-import random
 import os
 import requests
 import torch
@@ -189,22 +188,25 @@ def generate_related_questions(user_query):
         return questions[:3]  # Return the top 3 questions
     except Exception as e:
         return [f"Error generating questions: {str(e)}"]
-
-# Prompt user to select one of the generated questions
-def prompt_user_for_question_selection(questions):
-    """Prompt the user to select one of the generated questions."""
-    print("Please select one of the following questions:")
-    for idx, question in enumerate(questions, 1):
-        yield f"{idx}. {question}"
-    print("4. None of these")
     
-    while True:
-        user_selection = input("Pick One: ").strip()
-        if user_selection in ['1', '2', '3', '4']:
-            return int(user_selection)
-        else:
-            print("Invalid input. Please select 1, 2, 3, or 4.")
-
+#-------------------------------------------------------------------------------------
+# its not usefull part 
+#-------------------------------------------------------------------------------------
+# # Prompt user to select one of the generated questions
+# def prompt_user_for_question_selection(questions):
+#     """Prompt the user to select one of the generated questions."""
+#     print("Please select one of the following questions:")
+#     for idx, question in enumerate(questions, 1):
+#         yield f"{idx}. {question}"
+#     print("4. None of these")
+    
+#     while True:
+#         user_selection = input("Pick One: ").strip()
+#         if user_selection in ['1', '2', '3', '4']:
+#             return int(user_selection)
+#         else:
+#             print("Invalid input. Please select 1, 2, 3, or 4.")
+#-------------------------------------------------------------------------------------------------------
 
 def search_in_database(question):
     connection = connect_db()
@@ -465,28 +467,31 @@ def handle_query_with_stream(user_id, query):
             yield "Here are some related questions you might find helpful:"
             for idx, question in enumerate(related_questions, start=1):
                 yield f"{idx}. {question}"
-            yield "4. End Session"  
-    
+            return
+
+#---------------------------------------------------------------------------------------------------------------
+# this part also not usefull           
+#---------------------------------------------------------------------------------------------------------------   
         # 4. Handle related questions suggestion
-            selected_option = prompt_user_for_question_selection(related_questions)
-            if selected_option == 4:  # Assume 4 is the "End Session" option
-                yield "Session ended. Thank you for your query."
-                return
-            else:
-                selected_question = related_questions[selected_option - 1]
-                yield f"You selected: {selected_question}"
 
-                # Search database for the selected question's answer
-                cached_answer = search_in_database(selected_question)
-                if cached_answer:
-                    yield cached_answer
-                    return
-                else:
-                    groq_answer = call_groq_api(selected_question)
-                    yield groq_answer
-                    return
+            # selected_option = prompt_user_for_question_selection(related_questions)
+            # if selected_option == 4:  # Assume 4 is the "End Session" option
+            #     yield "Session ended. Thank you for your query."
+            #     return
+            # else:
+            #     selected_question = related_questions[selected_option - 1]
+            #     yield f"You selected: {selected_question}"
 
-
+            #     # Search database for the selected question's answer
+            #     cached_answer = search_in_database(selected_question)
+            #     if cached_answer:
+            #         yield cached_answer
+            #         return
+            #     else:
+            #         groq_answer = call_groq_api(selected_question)
+            #         yield groq_answer
+            #         return
+#-----------------------------------------------------------------------------------------------------------
     except Exception as e:
         print(e)
 
@@ -534,18 +539,30 @@ def handle_streaming_query(user_id=None, user_input=None):
         last_station = user_sessions.get(user_id, {}).get('last_station')
         report_decision = user_sessions.get(user_id, {}).get('report_decision')
 
+# ------------------------------------------------------------------------------------------------------------------
+# This part is changed by Abhay on 25-dec-2024
+# ------------------------------------------------------------------------------------------------------------------
+
         # Generate the chatbot response (assuming handle_query_with_stream yields responses)
         response_chunks = []
         for chunk in handle_query_with_stream(user_id, user_input):
             response_chunks.append(chunk)
-        chatbot_response = ''.join(response_chunks)
+
+        # Ensure line breaks are added for the complete response
+        chatbot_response = '\n'.join(response_chunks)
 
         # Save conversation to DB
         store_conversation(user_input, chatbot_response, user_id)
-        #print("handle_streaming_query function", user_input, chatbot_response, user_id)
-        # Stream the response
-        
-        return Response(stream_with_context(response_chunks), content_type='text/plain')
+
+        # Stream the response with line breaks
+        return Response(
+            stream_with_context((chunk + '\n' for chunk in response_chunks)),
+            content_type='text/plain'
+        )
+
+# ------------------------------------------------------------------------------------------------------------------
+# It end here.
+# -------------------------------------------------------------------------------------------------------------------
 
     except Exception as e:
         logging.error(f"Error in streaming query handler: {e}")
@@ -618,7 +635,7 @@ def webhook_get():
 def whatsapp_service(payload):
     # Constants
 
-    ACCESS_TOKEN='EAAyBDhP27soBO17ZCvnB61V7ao1EVUZBrysUtZADFRiuXvJO4Tfgol7ZBTouiB93AWWKRG6L6eZAT6yZAbZA03oRTQyas1NToEropj7USs1vCbrdZBWDRoKDVhDWzGQjJCZAK65IR2iTlunEZCJ14Mdf5ykXJhnw3MDYSfk3qZBZCExkZAc9DvrBvUXyHA1h6USZABIZATCE3Q1ZC6EITZB8mAjISGBHLL4WLk1WPdClOInyLgCtnTW8ZD'
+    ACCESS_TOKEN='EAAyBDhP27soBOZCeZCorWh1PGm8uZCs1I5drv8Ym9h8SVN3hSg0Qu8ZB3HtxDNhqasSBMJmnScTOP1WOTIAFVj4Wi34ZC7qnxuFdDkYiZAW90PTZCfQhnZC5RaHkvlUZCgm7SrceeoMSNfHUiVovrVwuOHd7PdB2ULZCHMamy9rPVapMqr4iZCQZCbbC5NWdPRGd5dUMC33ZCx4qqurAARwUFGuTa7ZA27Xi771rDQ67xXYBq0jIgZD'
     VERSION='v21.0'
     PHONE_NUMBER_ID = payload['phone_number_id']
     # URL and headers
