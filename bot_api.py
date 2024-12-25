@@ -1,5 +1,6 @@
 #[15:56, 23/12/2024] Abhay Office Noida: # whats app file hai yee
 import logging
+import random
 import os
 import requests
 import torch
@@ -419,7 +420,38 @@ def handle_query_with_stream(user_id, query):
 # ------------------------------------------------------------------------------------------------------------------
 # Here it END
 # ------------------------------------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------------------------------------------
+# This part is added by Abhay on 25-dec-2024
+# ------------------------------------------------------------------------------------------------------------------
 
+        if any(keyword in query.lower() for keyword in ['1', '2', '3']):
+            generated_question = get_last_response_from_db(user_id)
+            questions = generated_question.split('\n')
+            if query == '1' and len(questions) > 2:
+                query1 = questions[2]
+            elif query == '2' and len(questions) > 3:
+                query1 = questions[3]
+            elif query == '3' and len(questions) > 4:
+                 query1 = questions[4]
+            answer = call_groq_api(query1)
+            yield answer
+            
+            # 3. Generate related questions for further engagement
+            if query not in user_sessions[user_id]['related_questions_cache']:
+                related_questions = generate_related_questions(query)
+                user_sessions[user_id]['related_questions_cache'][query] = related_questions
+            else:
+                related_questions = user_sessions[user_id]['related_questions_cache'][query]
+    
+            yield "Here are some related questions you might find helpful:"
+            for idx, question in enumerate(related_questions, start=1):
+                yield f"{idx}. {question}"
+            return
+
+
+# ------------------------------------------------------------------------------------------------------------------
+# Here it END
+# ------------------------------------------------------------------------------------------------------------------
         # 2. Determine if query is an FAQ or intent-based query
         is_faq = query.lower().split()[0] in FAQ_KEYWORDS
 
@@ -635,7 +667,7 @@ def webhook_get():
 def whatsapp_service(payload):
     # Constants
 
-    ACCESS_TOKEN='EAAyBDhP27soBOZCeZCorWh1PGm8uZCs1I5drv8Ym9h8SVN3hSg0Qu8ZB3HtxDNhqasSBMJmnScTOP1WOTIAFVj4Wi34ZC7qnxuFdDkYiZAW90PTZCfQhnZC5RaHkvlUZCgm7SrceeoMSNfHUiVovrVwuOHd7PdB2ULZCHMamy9rPVapMqr4iZCQZCbbC5NWdPRGd5dUMC33ZCx4qqurAARwUFGuTa7ZA27Xi771rDQ67xXYBq0jIgZD'
+    ACCESS_TOKEN='EAAyBDhP27soBO17ZCvnB61V7ao1EVUZBrysUtZADFRiuXvJO4Tfgol7ZBTouiB93AWWKRG6L6eZAT6yZAbZA03oRTQyas1NToEropj7USs1vCbrdZBWDRoKDVhDWzGQjJCZAK65IR2iTlunEZCJ14Mdf5ykXJhnw3MDYSfk3qZBZCExkZAc9DvrBvUXyHA1h6USZABIZATCE3Q1ZC6EITZB8mAjISGBHLL4WLk1WPdClOInyLgCtnTW8ZD'
     VERSION='v21.0'
     PHONE_NUMBER_ID = payload['phone_number_id']
     # URL and headers
