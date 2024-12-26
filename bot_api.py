@@ -302,6 +302,8 @@ def handle_query_with_stream(user_id, query):
                 # Format the response as plain text
                 route_text = f"Route: {route_data['full_route']}\nZone: {route_data['distinct_zones']}\nTotal Fare: {route_data['total_fare']}"
                 yield route_text  # Yield the formatted plain text
+            else:
+                yield "sorry: Route not found"
                 return
 #-------------------------------------------------------------------------------------------------------------------------------------
 # end here
