@@ -292,8 +292,20 @@ def handle_query_with_stream(user_id, query):
             from_station = correct_station_name(from_station)
             to_station = correct_station_name(to_station)
             
-            # Fetch and display route and fare data directly
+#----------------------------------------------------------------------------------------------------------------------------------------
+# start here
+# this change by abhay and sarthak date - 26/12//2024 (3:53 pm)
+# ---------------------------------------------------------------------------------------------------------------------------------------            
             route_data = fetch_route_and_fare(from_station, to_station)
+
+            if "error" not in route_data:
+                # Format the response as plain text
+                route_text = f"Route: {route_data['full_route']}\nZone: {route_data['distinct_zones']}\nTotal Fare: {route_data['total_fare']}"
+                yield route_text  # Yield the formatted plain text
+                return
+#-------------------------------------------------------------------------------------------------------------------------------------
+# end here
+# ---------------------------------------------------------------------------------------------------------------------------------------
     
             if "error" in route_data:
                 print(f"Error fetching route and fare: {route_data['error']}")
