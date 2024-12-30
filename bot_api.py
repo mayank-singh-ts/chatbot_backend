@@ -267,7 +267,13 @@ def route_from_db(user_id):
     connection.close()
     return result['user_query'] if result else None
  
-
+def parse_input(user_input):
+    match = re.search(r'at (.+?)', user_input, re.IGNORECASE)
+    if match:
+        fetch_station = match.group(1).strip()
+        return fetch_station
+    else:
+        return None
 
 def handle_query_with_stream(user_id, query):
     similarity_score = 0
@@ -352,9 +358,22 @@ def handle_query_with_stream(user_id, query):
         
  # Check if it's a lost item query
         if any(keyword in query.lower() for keyword in ['lost', 'theft', 'stolen']):
-                user_sessions[user_id]['last_query'] = query
-                yield f"Which was the last station you were at?"
-                return  # Wait for the response for last_station
+# ------------------------------------------------------------------------------------------------------------------
+# There are some modification by Abhay on 28-DEC-2024
+# ------------------------------------------------------------------------------------------------------------------
+                fetch_station = parse_input(query)
+                if fetch_station is not None:
+                    groq_query = f"I lost my item at {fetch_station}. Can you guide me on how to report it to the Delhi Metro authorities?"
+                    report_info = call_groq_api(groq_query)
+                    yield f"Bot: {report_info}"
+                    return
+                else:
+                    user_sessions[user_id]['last_query'] = query
+                    yield f"Which was the last station you were at?"
+                    return  # Wait for the response for last_station
+# -------------------------------------------------------------------------------------------------------------------
+# TILL HERE
+# -------------------------------------------------------------------------------------------------------------------
 
         if chatbot_response and isinstance(chatbot_response, str):
             similarity_score = is_similar(chatbot_response.lower(), "Which was the last station you were at?")
@@ -376,12 +395,19 @@ def handle_query_with_stream(user_id, query):
                 yield "Okay, let me know if you need any other help."
             return
 # ------------------------------------------------------------------------------------------------------------------
-# This part is added by Abhay on 22-dec-2024
+# This part is added by Abhay on 22-dec-2024 //There are some modification by Abhay on 28-DEC-2024
 # ------------------------------------------------------------------------------------------------------------------
         if any(keyword in query.lower() for keyword in ['park', 'parking']):
-                user_sessions[user_id]['last_query'] = query
-                yield f"Which station are you looking to park at?"
-                return  # Wait for the response for last_station
+                fetch_station = parse_input(query)
+                if fetch_station is not None:
+                    groq_query = f"I looking for parking at {fetch_station}. Can you guide me what is the process to park my vechicle and is parking available at that station and what is the fare or fine to park my vechical?"
+                    report_info = call_groq_api(groq_query)
+                    yield f"Bot: {report_info}"
+                    return
+                else:
+                    user_sessions[user_id]['last_query'] = query
+                    yield f"Which station are you looking to park at?"
+                    return  # Wait for the response for last_station
 
         if chatbot_response and isinstance(chatbot_response, str):
             similarity_score = is_similar(chatbot_response.lower(), "Which station are you looking to park at?")
@@ -407,9 +433,16 @@ def handle_query_with_stream(user_id, query):
 
 
         if any(keyword in query.lower() for keyword in ['fire', 'emergency', 'accident']):
-                user_sessions[user_id]['last_query'] = query
-                yield f"Which station are you looking for emergency exit information?"
-                return  # Wait for the response for last_station
+                fetch_station = parse_input(query)
+                if fetch_station is not None:
+                    groq_query = f"I looking for emergency at {fetch_station} metro station. Can you guide me what to do in case of emergency and where is the exit gate for emergency?"
+                    report_info = call_groq_api(groq_query)
+                    yield f"Bot: {report_info}"
+                    return
+                else:
+                    user_sessions[user_id]['last_query'] = query
+                    yield f"Which station are you looking for emergency exit information?"
+                    return  # Wait for the response for last_station
 
         if chatbot_response and isinstance(chatbot_response, str):
             similarity_score = is_similar(chatbot_response.lower(), "Which station are you looking for emergency exit information?")
@@ -434,6 +467,8 @@ def handle_query_with_stream(user_id, query):
 # ------------------------------------------------------------------------------------------------------------------
 # Here it END
 # ------------------------------------------------------------------------------------------------------------------
+
+
 # ------------------------------------------------------------------------------------------------------------------
 # This part is added by Abhay on 25-dec-2024
 # ------------------------------------------------------------------------------------------------------------------
