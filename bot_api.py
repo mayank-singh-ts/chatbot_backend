@@ -1,7 +1,6 @@
-#[15:56, 23/12/2024] Abhay Office Noida: # whats app file hai yee
 import logging
-import random
 import os
+from matplotlib import lines
 import requests
 import torch
 from sentence_transformers import SentenceTransformer, util
@@ -12,6 +11,10 @@ import mysql.connector
 from flask_cors import CORS
 from flask import Flask, request, jsonify, session, Response, stream_with_context
 from difflib import SequenceMatcher
+from datetime import datetime
+import pandas as pd
+import boto3
+
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Flask App Configuration
@@ -101,7 +104,7 @@ def classify_faq(user_query, faq_tensor_embeddings, questions, faq_data, thresho
     similarities = util.pytorch_cos_sim(user_embedding, faq_tensor_embeddings)
     most_similar_idx = torch.argmax(similarities).item()
     best_score = similarities[0, most_similar_idx].item()
-
+    
     if best_score >= threshold:
         best_match_question = questions[most_similar_idx]
         for section, faqs in faq_data.items():
@@ -189,25 +192,7 @@ def generate_related_questions(user_query):
         return questions[:3]  # Return the top 3 questions
     except Exception as e:
         return [f"Error generating questions: {str(e)}"]
-    
-#-------------------------------------------------------------------------------------
-# its not usefull part 
-#-------------------------------------------------------------------------------------
-# # Prompt user to select one of the generated questions
-# def prompt_user_for_question_selection(questions):
-#     """Prompt the user to select one of the generated questions."""
-#     print("Please select one of the following questions:")
-#     for idx, question in enumerate(questions, 1):
-#         yield f"{idx}. {question}"
-#     print("4. None of these")
-    
-#     while True:
-#         user_selection = input("Pick One: ").strip()
-#         if user_selection in ['1', '2', '3', '4']:
-#             return int(user_selection)
-#         else:
-#             print("Invalid input. Please select 1, 2, 3, or 4.")
-#-------------------------------------------------------------------------------------------------------
+
 
 def search_in_database(question):
     connection = connect_db()
@@ -266,7 +251,6 @@ def route_from_db(user_id):
     result = cursor.fetchone()
     connection.close()
     return result['user_query'] if result else None
- 
 def parse_input(user_input):
     match = re.search(r'at (.+?)', user_input, re.IGNORECASE)
     if match:
@@ -309,12 +293,12 @@ def handle_query_with_stream(user_id, query):
                 route_text = f"Route: {route_data['full_route']}\nZone: {route_data['distinct_zones']}\nTotal Fare: {route_data['total_fare']}"
                 yield route_text  # Yield the formatted plain text
             else:
-                yield "sorry: Route not found"
+                yield "Sorry: Route not found between the provided stations."
                 return
 #-------------------------------------------------------------------------------------------------------------------------------------
 # end here
 # ---------------------------------------------------------------------------------------------------------------------------------------
-    
+
             if "error" in route_data:
                 print(f"Error fetching route and fare: {route_data['error']}")
             else:
@@ -323,7 +307,7 @@ def handle_query_with_stream(user_id, query):
                     print(f"Fare: ₹{route_data['total_fare']}")
                 else:
                     print("No route found between the provided stations.")
-            return  # End the function here to avoid additional question prompts
+                return  # End the function here to avoid additional question prompt
 
         # If only partial travel information (like "I want to travel") is given, prompt for details
         elif any(keyword in query.lower() for keyword in ["travel", "route", "go", "navigate"]):
@@ -355,7 +339,7 @@ def handle_query_with_stream(user_id, query):
                     else:
                         yield "No route found between the provided stations."
                     return  # End the function here to avoid additional question prompts
-        
+
  # Check if it's a lost item query
         if any(keyword in query.lower() for keyword in ['lost', 'theft', 'stolen']):
 # ------------------------------------------------------------------------------------------------------------------
@@ -501,9 +485,9 @@ def handle_query_with_stream(user_id, query):
 # ------------------------------------------------------------------------------------------------------------------
 # Here it END
 # ------------------------------------------------------------------------------------------------------------------
+
         # 2. Determine if query is an FAQ or intent-based query
         is_faq = query.lower().split()[0] in FAQ_KEYWORDS
-
         if is_faq:
 
             # Fetch FAQ data and process it
@@ -549,33 +533,117 @@ def handle_query_with_stream(user_id, query):
             for idx, question in enumerate(related_questions, start=1):
                 yield f"{idx}. {question}"
             return
+        
 
-#---------------------------------------------------------------------------------------------------------------
-# this part also not usefull           
-#---------------------------------------------------------------------------------------------------------------   
-        # 4. Handle related questions suggestion
-
-            # selected_option = prompt_user_for_question_selection(related_questions)
-            # if selected_option == 4:  # Assume 4 is the "End Session" option
-            #     yield "Session ended. Thank you for your query."
-            #     return
-            # else:
-            #     selected_question = related_questions[selected_option - 1]
-            #     yield f"You selected: {selected_question}"
-
-            #     # Search database for the selected question's answer
-            #     cached_answer = search_in_database(selected_question)
-            #     if cached_answer:
-            #         yield cached_answer
-            #         return
-            #     else:
-            #         groq_answer = call_groq_api(selected_question)
-            #         yield groq_answer
-            #         return
-#-----------------------------------------------------------------------------------------------------------
     except Exception as e:
         print(e)
 
+#------------------------------------------------------------------------------------------------------------------------------------------
+# This part is added by Abhay on 02-Jan-2025
+#------------------------------------------------------------------------------------------------------------------------------------------
+
+def fetch_table_data():
+    """Fetch all data from the chatbot_conversations table."""
+    try:
+        connection = connect_db()
+        cursor = connection.cursor(dictionary=True)
+        query = "SELECT * FROM chat_bot.chatbot_conversations"
+        cursor.execute(query)
+        result = cursor.fetchall()
+        connection.close()
+        return result
+    except mysql.connector.Error as err:
+        logging.error(f"Error fetching conversations: {err}")
+        return []
+
+
+def save_fetched_data_to_xyz(data=None):
+    """Fetch data from chatbot_conversations and save it to the xyz table."""
+    try:
+        data = fetch_table_data()
+        if not data:
+            logging.info("No data fetched to save.")
+            return
+
+        connection = connect_db()
+        cursor = connection.cursor()
+
+        # Insert data into xyz table
+        for row in data:
+            query = """
+            INSERT INTO chat_bot.archive_data (user_query, chatbot_response, timestamp) 
+            VALUES (%s, %s, %s)
+            """
+            cursor.execute(query, (row['user_query'], row['chatbot_response'], row['timestamp']))  # Replace with actual column names
+        connection.commit()
+
+        query = """
+        TRUNCATE TABLE chat_bot.chatbot_conversations
+        """
+        cursor.execute(query)
+        connection.commit()
+
+        connection.close()
+        logging.info("Data saved to xyz table successfully.")
+    except mysql.connector.Error as err:
+        logging.error(f"Error saving data to xyz table: {err}")
+    finally:
+        # Ensure connection is closed
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
+
+def generate_table_file(data=None):
+
+    try:
+        # Fetch the data if not provided
+        if data is None:
+            data = fetch_table_data()
+
+        # Ensure data is a DataFrame
+        if isinstance(data, list):
+            data = pd.DataFrame(data)  # Convert to DataFrame with default or specified columns
+
+        bucket_name = 'chatbotsolution'
+
+        # Initialize the S3 client
+        s3_client = boto3.client(
+            's3',
+            aws_access_key_id='AKIAS252WD7LGYA536UX',
+            aws_secret_access_key='2NYPyipSkqBFp7INRWf33lzn22Ejq3428jSNDjGy',
+            region_name='eu-north-1'  # e.g., 'us-west-1'
+        )
+        
+        response = s3_client.list_buckets()
+        response = s3_client.list_objects_v2(Bucket=bucket_name)
+        file_list = []
+        if 'Contents' in response:
+            print("Files in the bucket:")
+            for obj in response['Contents']:
+                print(f" - {obj['Key']}")
+            file_list.append(obj['Key'])
+        else:
+            print("No files found in the bucket.")
+
+        today_date = datetime.now().strftime("%Y-%m-%d")
+        filename = f"data_{today_date}.csv"
+        if filename not in file_list:
+            from io import StringIO
+            csv_buffer = StringIO()
+            data.to_csv(csv_buffer, index=False)
+            s3_client.put_object(Bucket=bucket_name, Key=filename, Body=csv_buffer.getvalue())
+
+            # s3_client.upload_file("output.csv", bucket_name, filename)
+            print(f"File uploaded to S3 bucket '{bucket_name}' successfully.")
+            save_fetched_data_to_xyz()
+    except mysql.connector.Error as err:
+        logging.error(f"Error fetching conversations: {err}")
+        return []
+
+
+#---------------------------------------------------------------------------------------------------------------------------------------
+# END HERE Abhay on 02-Jan-2025
+#---------------------------------------------------------------------------------------------------------------------------------------
 
 # Helper function to store query and response in MySQL
 def store_conversation(user_query, chatbot_response, user_id):
@@ -620,6 +688,8 @@ def handle_streaming_query(user_id=None, user_input=None):
         last_station = user_sessions.get(user_id, {}).get('last_station')
         report_decision = user_sessions.get(user_id, {}).get('report_decision')
 
+
+
 # ------------------------------------------------------------------------------------------------------------------
 # This part is changed by Abhay on 25-dec-2024
 # ------------------------------------------------------------------------------------------------------------------
@@ -634,6 +704,11 @@ def handle_streaming_query(user_id=None, user_input=None):
 
         # Save conversation to DB
         store_conversation(user_input, chatbot_response, user_id)
+
+
+# ******************************************************************************************************************
+        generate_table_file(data=None)
+# ******************************************************************************************************************
 
         # Stream the response with line breaks
         return Response(
@@ -664,12 +739,11 @@ def call_webhook_endpoint():
             if (messages):
                 messageFrom = messages[0]['from'] #// Sender's WhatsApp ID
                 messageBody = messages[0]['text']['body'] #// Message content
-#-------------------------------------------------------------------------------------
                 # this line is change by mayank 12/24/2024
 #                generate_4_digit_string = lambda: str(random.randint(1000, 9999))
 #                user_id = generate_4_digit_string()
                 user_id = str(messageFrom[-4:])
-#-----------------------------------------------------------------------------------------------                                                    
+
                 print('Received message from format:',messageFrom, messageBody)
                 
                 #payload = {"message": messageBody, "user_id": '123'}
@@ -716,7 +790,7 @@ def webhook_get():
 def whatsapp_service(payload):
     # Constants
 
-    ACCESS_TOKEN='EAAyBDhP27soBO17ZCvnB61V7ao1EVUZBrysUtZADFRiuXvJO4Tfgol7ZBTouiB93AWWKRG6L6eZAT6yZAbZA03oRTQyas1NToEropj7USs1vCbrdZBWDRoKDVhDWzGQjJCZAK65IR2iTlunEZCJ14Mdf5ykXJhnw3MDYSfk3qZBZCExkZAc9DvrBvUXyHA1h6USZABIZATCE3Q1ZC6EITZB8mAjISGBHLL4WLk1WPdClOInyLgCtnTW8ZD'
+    ACCESS_TOKEN='EAAyBDhP27soBO0FOHMTIWZB0bMOfdoke2SWSgtqHqRPvfwBOquA803ZBYGX8HZBIqn9rMbSInb9xX2N35ljoEUt4Mg54xUrIRR93orfGXzy3ouPkoaclujLf9QE93Bj9fu6qxxL6MX5b5CKP3BZBow7ONWm3P3ZAVI2ZAtobxgdOPzRKQZAABHIOautstZAIyziPJCN6mFTDUdPy0r0gOBctnXhoiOvI4eBO8IX98MpOR5YZD'
     VERSION='v21.0'
     PHONE_NUMBER_ID = payload['phone_number_id']
     # URL and headers
